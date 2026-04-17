@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tether P2P Chat</title>
+    <style>
+        :root { --eth: #26A17B; --bg: #0E1621; --panel: #17212B; --text: #F5F5F5; }
+        body { background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; display: flex; justify-content: center; padding: 10px; margin: 0; height: 100vh; box-sizing: border-box; }
+        .card { background: var(--panel); padding: 20px; border-radius: 16px; width: 100%; max-width: 400px; border: 1px solid #232E3C; display: flex; flex-direction: column; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        header { color: var(--eth); font-weight: bold; margin-bottom: 20px; text-align: center; font-size: 20px; letter-spacing: 1px; }
+        
+        .setup-section { display: flex; flex-direction: column; gap: 10px; }
+        textarea { width: 100%; background: #242F3D; border: 1px solid #333; color: #00ff00; border-radius: 8px; padding: 10px; font-size: 11px; height: 80px; box-sizing: border-box; resize: none; font-family: monospace; }
+        
+        button { width: 100%; background: var(--eth); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; font-size: 14px; }
+        button:hover { filter: brightness(1.2); }
+        button:disabled { background: #444; cursor: not-allowed; }
+
+        #chat-wrap { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+        #chat { flex: 1; overflow-y: auto; background: #0c121a; padding: 15px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #232E3C; }
+        .msg { margin-bottom: 10px; padding: 8px 12px; border-radius: 10px; max-width: 85%; font-size: 14px; line-height: 1.4; }
+        .mine { background: #2B5278; align-self: flex-end; margin-left: auto; }
+        .others { background: #182533; align-self: flex-start; }
+
+        .controls { display: flex; gap: 8px; }
+        input { flex: 1; background: #242F3D; border: 1px solid #333; color: white; padding: 12px; border-radius: 8px; outline: none; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <header id="status">TETHER P2P</header>
+    
+    <div id="setup-area" class="setup-section">
+        <button id="btn-create">1. СОЗДАТЬ ЧАТ (OFFER)</button>
+        <textarea id="out-code" readonly placeholder="Твой секретный ключ появится тут..."></textarea>
+        <div style="height: 1px; background: #232E3C; margin: 10px 0;"></div>
+        <textarea id="in-code" placeholder="Вставь ключ друга сюда..."></textarea>
+        <button id="btn-connect">2. ПОДКЛЮЧИТЬСЯ</button>
+    </div>
+
+    <div id="chat-wrap">
+        <div id="chat"></div>
+        <div class="controls">
+            <input type="text" id="msg-input" placeholder="Сообщение...">
+            <button id="btn-send" style="width: auto;">Отправить</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:://google.com" }] });
+    let dc;
+
+    const status = document.getElementById('status');
+    const outCode = document.getElementById('out-code');
+    const inCode = document.getElementById('in-code');
+
+    function setupDataChannel(channel) {
+        dc = channel;
+        dc.onopen = () => {
+            document.getElementById('setup-area').style.display = 'none';
+            document.getElementById('chat-wrap').style.display = 'flex';
+            status.innerText = "В СЕТИ";
+            status.style.color = "#00ff00";
+        };
+        dc.onmessage = e => addMessage(e.data, 'others');
+    }
+
+    // Собираем ICE-кандидатов в один код
+    pc.onicecandidate = e => {
+        if (!e.candidate) {
+            outCode.value = btoa(JSON.stringify(pc.localDescription));
+            outCode.select();
+            console.log("Ключ полностью готов");
+        }
+    };
+
+    // 1. Создать чат
+    document.getElementById('btn-create').onclick = async () => {
+        setupDataChannel(pc.createDataChannel("chat"));
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        status.innerText = "ГЕНЕРАЦИЯ КЛЮЧА...";
+    };
+
+    // 2. Подключиться
+    document.getElementById('btn-connect').onclick = async () => {
+        const input = inCode.value.trim();
+        if (!input) return alert("Вставь код!");
+
+        try {
+            const data = JSON.parse(atob(input));
+            if (data.type === "offer") {
+                await pc.setRemoteDescription(new RTCSessionDescription(data));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                pc.ondatachannel = e => setupDataChannel(e.channel);
+                status.innerText = "ОТПРАВЬ ОТВЕТ ДРУГУ";
+            } else if (data.type === "answer") {
+                await pc.setRemoteDescription(new RTCSessionDescription(data));
+            }
+        } catch (e) {
+            alert("Ошибка в ключе! Скопируй полностью.");
+            console.error(e);
+        }
+    };
+
+    // Отправка сообщений
+    const sendMsg = () => {
+        const input = document.getElementById('msg-input');
+        if (dc && dc.readyState === "open" && input.value.trim()) {
+            dc.send(input.value);
+            addMessage(input.value, 'mine');
+            input.value = "";
+        }
+    };
+
+    document.getElementById('btn-send').onclick = sendMsg;
+    document.getElementById('msg-input').onkeypress = e => { if(e.key==='Enter') sendMsg(); };
+
+    function addMessage(text, side) {
+        const div = document.createElement('div');
+        div.className = `msg ${side}`;
+        div.innerText = text;
+        const chat = document.getElementById('chat');
+        chat.appendChild(div);
+        chat.scrollTop = chat.scrollHeight;
+    }
+</script>
+</body>
+</html>
